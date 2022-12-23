@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link
+      rel="stylesheet"
+      href="/static/pure-min.css"
+      integrity="sha384-X38yfunGUhNzHpBaEBsWLO+A0HDYOQi8ufWDkZ0k9e0eXz/tH3II7uKZ9msv++Ls"
+      crossorigin="anonymous"
+    />
+    <script src="/static/react.production.min.js"></script>
+    <script src="/static/react-dom.production.min.js"></script>
+    <script src="/static/babel.min.js"></script>
+    <title>RSSLater</title>
+  </head>
+  <body style="padding: 2em">
+    <div id="root"></div>
+  </body>
+  <script type="text/babel">
+    const { useState, useEffect, useCallback } = React;
+
+    const base64 = (() => {
+      const base64abc = [
+        "A",
+        "B",
+        "C",
+        "D",
+        "E",
+        "F",
+        "G",
+        "H",
+        "I",
+        "J",
+        "K",
+        "L",
+        "M",
+        "N",
+        "O",
+        "P",
+        "Q",
+        "R",
+        "S",
+        "T",
+        "U",
+        "V",
+        "W",
+        "X",
+        "Y",
+        "Z",
+        "a",
+        "b",
+        "c",
+        "d",
+        "e",
+        "f",
+        "g",
+        "h",
+        "i",
+        "j",
+        "k",
+        "l",
+        "m",
+        "n",
+        "o",
+        "p",
+        "q",
+        "r",
+        "s",
+        "t",
+        "u",
+        "v",
+        "w",
+        "x",
+        "y",
+        "z",
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "+",
+        "/",
+      ];
+
+      /**
+       * @param {ArrayBuffer | string} data
+       * @returns {string}
+       */
+      function b64encode(data) {
+        const uint8 =
+          typeof data === "string"
+            ? new TextEncoder().encode(data)
+            : data instanceof Uint8Array
+            ? data
+            : new Uint8Array(data);
+        let result = "",
+          i;
+        const l = uint8.length;
+        for (i = 2; i < l; i += 3) {
+          result += base64abc[uint8[i - 2] >> 2];
+          result +=
+            base64abc[((uint8[i - 2] & 0x03) << 4) | (uint8[i - 1] >> 4)];
+          result += base64abc[((uint8[i - 1] & 0x0f) << 2) | (uint8[i] >> 6)];
+          result += base64abc[uint8[i] & 0x3f];
+        }
+        if (i === l + 1) {
+          // 1 octet yet to write
+          result += base64abc[uint8[i - 2] >> 2];
+          result += base64abc[(uint8[i - 2] & 0x03) << 4];
+          result += "==";
+        }
+        if (i === l) {
+          // 2 octets yet to write
+          result += base64abc[uint8[i - 2] >> 2];
+          result +=
+            base64abc[((uint8[i - 2] & 0x03) << 4) | (uint8[i - 1] >> 4)];
+          result += base64abc[(uint8[i - 1] & 0x0f) << 2];
+          result += "=";
+        }
+        return result;
+      }
+
+      /**
+       * Decodes a given RFC4648 base64 encoded string
+       * @param {string} b64
+       * @returns {Uint8Array}
+       */
+      function b64decode(b64) {
+        const binString = atob(b64);
+        const size = binString.length;
+        const bytes = new Uint8Array(size);
+        for (let i = 0; i < size; i++) {
+          bytes[i] = binString.charCodeAt(i);
+        }
+        return bytes;
+      }
+
+      return {
+        encode: b64encode,
+        decode: b64decode,
+      };
+    })();
+
+    const base64url = (() => {
+      /*
+       * Some variants allow or require omitting the padding '=' signs:
+       * https://en.wikipedia.org/wiki/Base64#The_URL_applications
+       *
+       * @param {string} base64url
+       * @returns {string}
+       */
+      function addPaddingToBase64url(base64url) {
+        if (base64url.length % 4 === 2) return base64url + "==";
+        if (base64url.length % 4 === 3) return base64url + "=";
+        if (base64url.length % 4 === 1) {
+          throw new TypeError("Illegal base64url string!");
+        }
+        return base64url;
+      }
+      /**
+       * @param {string} b64url
+       * @returns {string}
+       */
+      function convertBase64urlToBase64(b64url) {
+        if (!/^[-_A-Z0-9]*?={0,2}$/i.test(b64url)) {
+          // Contains characters not part of base64url spec.
+          throw new TypeError("Failed to decode base64url: invalid character");
+        }
+        return addPaddingToBase64url(b64url)
+          .replace(/\-/g, "+")
+          .replace(/_/g, "/");
+      }
+
+      /**
+       * @param {string} b64
+       * @returns {string}
+       */
+      function convertBase64ToBase64url(b64) {
+        return b64.replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
+      }
+
+      /**
+       * Encodes a given ArrayBuffer or string into a base64url representation
+       * @param {ArrayBuffer | string} data
+       * @returns {string}
+       */
+      function encode(data) {
+        return convertBase64ToBase64url(base64.encode(data));
+      }
+
+      /**
+       * Converts given base64url encoded data back to original
+       * @param {string} b64url
+       * @returns {Uint8Array}
+       */
+      function decode(b64url) {
+        return base64.decode(convertBase64urlToBase64(b64url));
+      }
+
+      return {
+        encode,
+        decode,
+      };
+    })();
+
+    class RPCError extends Error {
+      constructor(code, message) {
+        super(`${message} (code: ${code})`);
+        this.code = code;
+      }
+    }
+
+    var idseq = Date.now();
+    async function rpc(method, params) {
+      const reqid = ++idseq;
+      const response = await fetch("/rpc/2022-12-22", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          id: reqid,
+          jsonrpc: "2.0",
+          method,
+          params,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error("non-ok response returned from server");
+      }
+      const data = await response.json();
+      if (data.jsonrpc !== "2.0") {
+        throw new Error("invalid response structure");
+      }
+      if (data.id !== reqid) {
+        throw new Error("request id mismatch");
+      }
+      if (data.error) {
+        // jwt is bad, clear session
+        if (data.error.code === -32604) {
+          sessionStorage.clear();
+          window.location.reload();
+        }
+        throw new RPCError(data.error.code, data.error.message);
+      }
+      return data.result;
+    }
+
+    /**
+     * @param {boolean} includeNewJWT
+     * @returns {Promise<string|undefined>}
+     */
+    async function setupSecurityKey(includeNewJWT = false) {
+      /** @type {{regSessionID: string; credentialCreationOptions: CredentialCreationOptions}} */
+      const options = await rpc("webauthn:registration:begin", {
+        ConfigJWT: sessionStorage.getItem("jwt.config"),
+      });
+      options.credentialCreationOptions.publicKey.challenge = base64.decode(
+        options.credentialCreationOptions.publicKey.challenge
+      );
+      options.credentialCreationOptions.publicKey.user.id = stringToArrayBuffer(
+        options.credentialCreationOptions.publicKey.user.id
+      );
+      if (options.credentialCreationOptions.publicKey.excludeCredentials) {
+        options.credentialCreationOptions.publicKey.excludeCredentials =
+          options.credentialCreationOptions.publicKey.excludeCredentials.map(
+            (exc) => {
+              return {
+                id: base64.decode(exc.id),
+                type: exc.type,
+              };
+            }
+          );
+      }
+      const credential = await navigator.credentials.create(
+        options.credentialCreationOptions
+      );
+
+      /** @type {AuthenticatorAttestationResponse} */
+      const response = credential.response;
+      if (!(response instanceof AuthenticatorAttestationResponse)) {
+        throw new Error(
+          "Registration failed: did not get expected AuthenticatorAttestationResponse"
+        );
+      }
+
+      const keyName = prompt("Name your security key. Helps later trust me!");
+
+      const attestation = {
+        id: credential.id,
+        rawId: base64encode(credential.rawId),
+        type: credential.type,
+        response: {
+          clientDataJSON: base64encode(response.clientDataJSON),
+          attestationObject: base64encode(response.attestationObject),
+        },
+      };
+      const result = await rpc("webauthn:registration:finish", {
+        includeNewJWT,
+        keyName,
+        regSessionID: options.regSessionID,
+        credentialCreationResponse: attestation,
+      });
+      return result.configuringJWT;
+    }
+
+    /**
+     * Converts a string to an ArrayBuffer
+     * @param {string} string string to convert
+     * @returns {ArrayBuffer}
+     */
+    function stringToArrayBuffer(str) {
+      return Uint8Array.from(str, (c) => c.charCodeAt(0)).buffer;
+    }
+
+    /**
+     * Converts an array buffer to a UTF-8 string
+     * @param {ArrayBuffer} arrayBuffer
+     * @returns {string}
+     */
+    function arrayBufferToString(arrayBuffer) {
+      return String.fromCharCode.apply(null, new Uint8Array(arrayBuffer));
+    }
+
+    function base64encode(arrayBuffer) {
+      return base64url.encode(arrayBuffer);
+    }
+
+    function SetupWebauthn({ onSetupComplete }) {
+      return (
+        <div>
+          <h3>Server is not initialized</h3>
+          <p>
+            This looks like a fresh installation of RSSLater. The first step to
+            set up this server is to set up a security key for authentication.
+          </p>
+          <p>Click the button below to get started with that.</p>
+          <button
+            onClick={() => {
+              setupSecurityKey(true).then((configuringJWT) => {
+                onSetupComplete(configuringJWT);
+              });
+            }}
+          >
+            Setup Security Key
+          </button>
+        </div>
+      );
+    }
+
+    function MainControlPanel() {
+      const configJWT = sessionStorage.getItem("jwt.config");
+      const [keys, setKeys] = useState([]);
+      const [bookmarklet, setBookmarklet] = useState(null);
+      const [feedURL, setFeedURL] = useState(null);
+      const refreshKeys = useCallback(() => {
+        return rpc("webauthn:list_keys", {
+          ConfigureJWT: configJWT,
+        }).then((result) => {
+          setKeys(result.Keys);
+        });
+      }, [configJWT]);
+      const refreshBookmarklet = useCallback(() => {
+        return rpc("gen_bookmarklet", {
+          ConfigureJWT: configJWT,
+        }).then((result) => {
+          setBookmarklet(result);
+        });
+      }, [configJWT]);
+      const refreshFeedURL = useCallback(() => {
+        return rpc("gen_feed_url", {
+          ConfigureJWT: configJWT,
+        }).then((result) => {
+          setFeedURL(result);
+        });
+      }, [configJWT]);
+
+      useEffect(() => {
+        if (!!configJWT) {
+          refreshKeys();
+          refreshBookmarklet();
+          refreshFeedURL();
+        }
+      }, [refreshKeys]);
+      return (
+        <div>
+          <section>
+            <h3>Bookmarklet</h3>
+            <p>Drag and drop the link below to your bookmarks bar:</p>
+            {bookmarklet && (
+              <a href={`javascript:${bookmarklet}`}>Save For Later</a>
+            )}
+          </section>
+          <hr />
+          <section>
+            <h3>RSS Feed URL</h3>
+            <p>Add the following URL to your favorite RSS reader:</p>
+            <pre>{feedURL}</pre>
+          </section>
+          <hr />
+          <section></section>
+          <section>
+            <h3>Setup more Security Keys</h3>
+            <p>
+              You can set up more security keys if you want. Always a good idea!
+            </p>
+            <button
+              onClick={() => {
+                setupSecurityKey().then(() => {
+                  return refreshKeys();
+                });
+              }}
+            >
+              Setup Additional Security Key
+            </button>
+            {keys.length > 0 && (
+              <React.Fragment>
+                <h4>Existing Keys</h4>
+                <table className="pure-table">
+                  <thead>
+                    <tr>
+                      <th>name</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {keys.map((k) => {
+                      return (
+                        <tr>
+                          <td>{k.Name}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </React.Fragment>
+            )}
+          </section>
+        </div>
+      );
+    }
+
+    async function securityKeyLogin() {
+      /** @type {{ Options: CredentialRequestOptions, LoginSessionID: string }} */
+      const options = await rpc("webauthn:login:begin");
+      console.log({ options });
+      options.Options.publicKey.challenge = base64.decode(
+        options.Options.publicKey.challenge
+      );
+      options.Options.publicKey.allowCredentials =
+        options.Options.publicKey.allowCredentials.map((ac) => {
+          return {
+            type: ac.type,
+            id: base64.decode(ac.id),
+          };
+        });
+
+      const credential = await navigator.credentials.get(options.Options);
+      console.log({ credential });
+      /** @type {AuthenticatorAssertionResponse} */
+      const response = credential.response;
+      if (!(response instanceof AuthenticatorAssertionResponse)) {
+        throw new Error(
+          "Registration failed: did not get expected AuthenticatorAssertionResponse"
+        );
+      }
+
+      const attestation = {
+        id: credential.id,
+        rawId: base64encode(credential.rawId),
+        type: credential.type,
+        response: {
+          clientDataJSON: base64encode(response.clientDataJSON),
+          authenticatorData: base64encode(response.authenticatorData),
+          signature: base64encode(response.signature),
+        },
+      };
+      const result = await rpc("webauthn:login:finish", {
+        loginSessionID: options.LoginSessionID,
+        credentialRequestResponse: attestation,
+      });
+      return result.ConfigJWT;
+    }
+
+    function Login({ onLoginComplete }) {
+      return (
+        <div>
+          <h3>Login</h3>
+          <p>Click the button below to log in:</p>
+          <button
+            onClick={() => {
+              securityKeyLogin().then((configJWT) => {
+                sessionStorage.setItem("jwt.config", configJWT);
+                onLoginComplete();
+              });
+            }}
+          >
+            Log In
+          </button>
+        </div>
+      );
+    }
+
+    function App() {
+      const [serverInit, setServerInit] = useState(null);
+      useEffect(() => {
+        rpc("server_initialized").then((isInit) => {
+          setServerInit(isInit);
+        });
+      }, setServerInit);
+      return (
+        <div>
+          <h1>RSSLater Control Panel</h1>
+          {serverInit === null ? (
+            "Loading..."
+          ) : serverInit ? (
+            sessionStorage.getItem("jwt.config") ? (
+              <MainControlPanel />
+            ) : (
+              <Login
+                onLoginComplete={() => {
+                  window.location.reload();
+                }}
+              />
+            )
+          ) : (
+            <SetupWebauthn
+              onSetupComplete={(configuringJWT) => {
+                if (configuringJWT) {
+                  sessionStorage.setItem("jwt.config", configuringJWT);
+                }
+                rpc("server_initialized").then((isInit) => {
+                  setServerInit(isInit);
+                });
+              }}
+            />
+          )}
+        </div>
+      );
+    }
+
+    window.base64 = base64;
+    window.base64url = base64url;
+
+    ReactDOM.render(<App />, document.getElementById("root"));
+  </script>
+</html>
