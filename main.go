@@ -53,11 +53,12 @@ var publicFS embed.FS
 
 func rootCommand() *cobra.Command {
 	var args struct {
-		listenAddr      string
-		tlsCert, tlsKey string
-		storageFilename string
-		origin          string
-		autoCert        bool
+		listenAddr         string
+		tlsCert, tlsKey    string
+		storageFilename    string
+		origin             string
+		browserExtensionID string
+		autoCert           bool
 	}
 	cmd := &cobra.Command{
 		Use: "rsslater",
@@ -92,10 +93,11 @@ func rootCommand() *cobra.Command {
 				fmt.Printf("Navigate to the server in a browser to finish setup: %s\n", originURL)
 			}
 			svc := &service{
-				origin:      originURL.String(),
-				sessionData: map[string]any{},
-				str:         str,
-				web:         web,
+				browserExtensionID: args.browserExtensionID,
+				origin:             originURL.String(),
+				sessionData:        map[string]any{},
+				str:                str,
+				web:                web,
 			}
 			if err := svc.str.init(c.Context()); err != nil {
 				return errors.Wrap(err, "storage failed to initialized")
@@ -109,7 +111,7 @@ func rootCommand() *cobra.Command {
 					func(ctx context.Context, _ json.RawMessage) (struct{}, error) {
 						return struct{}{}, nil
 					},
-					func(ctx context.Context, result bool) (json.RawMessage, error) {
+					func(ctx context.Context, result isInitializedResponse) (json.RawMessage, error) {
 						return json.Marshal(result)
 					},
 				),
@@ -180,19 +182,6 @@ func rootCommand() *cobra.Command {
 						var req genFeedURLRequest
 						if err := json.Unmarshal(paramsJson, &req); err != nil {
 							return genFeedURLRequest{}, errors.Wrap(err, "invalid json")
-						}
-						return req, nil
-					},
-					func(ctx context.Context, r string) (json.RawMessage, error) {
-						return json.Marshal(r)
-					},
-				),
-				"gen_bookmarklet": genericEndpointCode(
-					svc.genSaveForLaterBookmark,
-					func(ctx context.Context, paramsJson json.RawMessage) (genSaveForLaterBookmarkRequest, error) {
-						var req genSaveForLaterBookmarkRequest
-						if err := json.Unmarshal(paramsJson, &req); err != nil {
-							return genSaveForLaterBookmarkRequest{}, errors.Wrap(err, "invalid json")
 						}
 						return req, nil
 					},
@@ -276,6 +265,7 @@ func rootCommand() *cobra.Command {
 	cmd.Flags().StringVar(&args.tlsKey, "tls-key", "", "a tls key to use for HTTPS")
 	cmd.Flags().StringVar(&args.storageFilename, "storage-file", "./rsslater-storage.json", "where the storage file is written/read")
 	cmd.Flags().StringVar(&args.origin, "origin", "", "the publicly reachable url of your server")
+	cmd.Flags().StringVar(&args.browserExtensionID, "browser-extension-id", "pjekhacnlpbohbgbldadpnkaomlmlloe", "the ID of the browser extension being used with this installation")
 	return cmd
 }
 

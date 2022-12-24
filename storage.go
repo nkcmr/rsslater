@@ -39,7 +39,7 @@ const (
 	// configuring is a JWT for using the web interface to configure stuff
 	configuring
 
-	// saving is a JWT that will be embedded in the bookmarklet just for saving
+	// saving is a JWT that will be embedded in the extension just for saving
 	// new things
 	saving
 

@@ -21,6 +21,17 @@
   <script type="text/babel">
     const { useState, useEffect, useCallback } = React;
 
+    function browserAPI() {
+      return globalThis.browser || globalThis.chrome;
+    }
+
+    function isFirefox() {
+      return (
+        /Firefox\/[0-9\.]+/.test(navigator.userAgent) &&
+        !/Seamonkey\//.test(navigator.userAgent)
+      );
+    }
+
     const base64 = (() => {
       const base64abc = [
         "A",
@@ -355,23 +366,112 @@
       );
     }
 
-    function MainControlPanel() {
+    function extensionSetupAuth(browserExtensionID, jwt) {
+      return new Promise((resolve, reject) => {
+        if (
+          !browserAPI() ||
+          !browserAPI().runtime ||
+          !browserAPI().runtime.sendMessage
+        ) {
+          reject(
+            new Error(
+              "Browser API for communicating with extension is not available"
+            )
+          );
+          return;
+        }
+        try {
+          browserAPI().runtime.sendMessage(
+            browserExtensionID,
+            { op: "set_auth", jwt },
+            () => {
+              if (browserAPI().runtime.lastError) {
+                reject(new Error(browserAPI().runtime.lastError.message));
+              } else {
+                resolve();
+              }
+            }
+          );
+        } catch (e) {
+          reject(e);
+        }
+      });
+    }
+
+    const EXTENSION_SETUP_NOT_SUPPORTED = -2;
+    const EXTENSION_STATE_UNKNOWN = -1;
+    const EXTENSION_NOT_INSTALLED = 0;
+    const EXTENSION_NOT_CONNECTED = 1;
+    const EXTENSION_CONNECTED = 2;
+
+    function extensionIsInstalled(browserExtensionID) {
+      return new Promise((resolve, reject) => {
+        if (isFirefox()) {
+          resolve(EXTENSION_SETUP_NOT_SUPPORTED);
+          return;
+        }
+        if (
+          !browserAPI() ||
+          !browserAPI().runtime ||
+          !browserAPI().runtime.sendMessage
+        ) {
+          resolve(EXTENSION_NOT_INSTALLED);
+          return;
+        }
+        try {
+          browserAPI().runtime.sendMessage(
+            browserExtensionID,
+            { op: "ping" },
+            (response) => {
+              if (browserAPI().runtime.lastError) {
+                reject(new Error(browserAPI().runtime.lastError.message));
+                return;
+              }
+              resolve(
+                response.connected
+                  ? EXTENSION_CONNECTED
+                  : EXTENSION_NOT_CONNECTED
+              );
+            }
+          );
+        } catch (e) {
+          resolve(EXTENSION_NOT_INSTALLED);
+        }
+      });
+    }
+
+    function MainControlPanel({ browserExtensionID }) {
+      const [extInstalled, setExtInstalled] = useState(EXTENSION_STATE_UNKNOWN);
+      useEffect(() => {
+        if (!browserExtensionID) {
+          return () => {};
+        }
+        const handle = setInterval(() => {
+          extensionIsInstalled(browserExtensionID)
+            .then((result) => {
+              setExtInstalled(result);
+            })
+            .catch((e) => {
+              console.error(
+                "failed to check for extension installation status",
+                e
+              );
+            });
+        }, 50);
+        return () => {
+          clearInterval(handle);
+        };
+      }, [browserExtensionID]);
+      const [extensionPairingCode, setExtensionPairingCode] = useState(null);
       const configJWT = sessionStorage.getItem("jwt.config");
       const [keys, setKeys] = useState([]);
-      const [bookmarklet, setBookmarklet] = useState(null);
       const [feedURL, setFeedURL] = useState(null);
+
       const refreshKeys = useCallback(() => {
         return rpc("webauthn:list_keys", {
           ConfigureJWT: configJWT,
         }).then((result) => {
           setKeys(result.Keys);
-        });
-      }, [configJWT]);
-      const refreshBookmarklet = useCallback(() => {
-        return rpc("gen_bookmarklet", {
-          ConfigureJWT: configJWT,
-        }).then((result) => {
-          setBookmarklet(result);
         });
       }, [configJWT]);
       const refreshFeedURL = useCallback(() => {
@@ -385,24 +485,125 @@
       useEffect(() => {
         if (!!configJWT) {
           refreshKeys();
-          refreshBookmarklet();
           refreshFeedURL();
         }
       }, [refreshKeys]);
       return (
         <div>
           <section>
-            <h3>Bookmarklet</h3>
-            <p>Drag and drop the link below to your bookmarks bar:</p>
-            {bookmarklet && (
-              <a href={`javascript:${bookmarklet}`}>Save For Later</a>
+            <h3>Browser Extension</h3>
+            <p>
+              <b>Installation Status:</b>&nbsp;
+              {extInstalled === EXTENSION_SETUP_NOT_SUPPORTED && (
+                <React.Fragment>
+                  Automatic extension setup is not supported in Firefox!
+                </React.Fragment>
+              )}
+              {extInstalled === EXTENSION_NOT_INSTALLED && (
+                <React.Fragment>Not installed in browser</React.Fragment>
+              )}
+              {extInstalled === EXTENSION_NOT_CONNECTED && (
+                <React.Fragment>
+                  Installed in browser, not connected yet
+                </React.Fragment>
+              )}
+              {extInstalled === EXTENSION_CONNECTED && (
+                <React.Fragment>
+                  Installed in browser, and connected!
+                </React.Fragment>
+              )}
+            </p>
+            {extInstalled === EXTENSION_NOT_INSTALLED && (
+              <React.Fragment>
+                <p>
+                  <b>Next Step:</b>&nbsp;Install the browser extension: TODO
+                  link
+                </p>
+              </React.Fragment>
             )}
+            {extInstalled === EXTENSION_SETUP_NOT_SUPPORTED ? (
+              <React.Fragment>
+                <p>
+                  <b>Next Step:</b>&nbsp;Please make sure the extension is
+                  installed and active (Unable to detect if it is or not in
+                  Firefox). Once confirmed, hit the button below to get a
+                  pairing code that you can copy-paste into the extension popup.
+                </p>
+                <button
+                  disabled={!!extensionPairingCode}
+                  onClick={() => {
+                    securityKeyLogin({ forSaving: true }).then((savingJWT) => {
+                      setExtensionPairingCode(
+                        btoa(
+                          JSON.stringify({
+                            endpoint: `${origin}/rpc/2022-12-22`,
+                            jwt: savingJWT,
+                          })
+                        )
+                      );
+                    });
+                  }}
+                >
+                  Manually Connect to Browser Extension
+                </button>
+                {!!extensionPairingCode && (
+                  <React.Fragment>
+                    <p>
+                      Copy the manual pairing code below and paste it into the
+                      browser extension. (
+                      <b>
+                        Do NOT share this with anyone it is supposed to be a
+                        secret.
+                      </b>
+                      )
+                    </p>
+                    <form
+                      className="pure-form"
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                      }}
+                    >
+                      <input
+                        type="text"
+                        readonly=""
+                        value={extensionPairingCode}
+                      />
+                    </form>
+                  </React.Fragment>
+                )}
+              </React.Fragment>
+            ) : null}
+            {extInstalled === EXTENSION_NOT_CONNECTED ? (
+              <React.Fragment>
+                <p>
+                  <b>Next Step:</b>&nbsp;Now that the browser extension is
+                  installed, click the button below to connect it to this
+                  server:
+                </p>
+                <button
+                  onClick={() => {
+                    securityKeyLogin({ forSaving: true }).then((savingJWT) => {
+                      extensionSetupAuth(browserExtensionID, savingJWT);
+                    });
+                  }}
+                >
+                  Connect to Browser Extension
+                </button>
+              </React.Fragment>
+            ) : null}
           </section>
           <hr />
           <section>
             <h3>RSS Feed URL</h3>
             <p>Add the following URL to your favorite RSS reader:</p>
-            <pre>{feedURL}</pre>
+
+            <pre
+              style={{
+                "white-space": "pre-wrap",
+              }}
+            >
+              {feedURL}
+            </pre>
           </section>
           <hr />
           <section></section>
@@ -446,10 +647,12 @@
       );
     }
 
-    async function securityKeyLogin() {
+    /**
+     * @param {{ forSaving?: boolean }} options
+     */
+    async function securityKeyLogin({ forSaving } = { forSaving: false }) {
       /** @type {{ Options: CredentialRequestOptions, LoginSessionID: string }} */
       const options = await rpc("webauthn:login:begin");
-      console.log({ options });
       options.Options.publicKey.challenge = base64.decode(
         options.Options.publicKey.challenge
       );
@@ -462,7 +665,6 @@
         });
 
       const credential = await navigator.credentials.get(options.Options);
-      console.log({ credential });
       /** @type {AuthenticatorAssertionResponse} */
       const response = credential.response;
       if (!(response instanceof AuthenticatorAssertionResponse)) {
@@ -484,8 +686,9 @@
       const result = await rpc("webauthn:login:finish", {
         loginSessionID: options.LoginSessionID,
         credentialRequestResponse: attestation,
+        forSaving,
       });
-      return result.ConfigJWT;
+      return result.JWT;
     }
 
     function Login({ onLoginComplete }) {
@@ -509,11 +712,17 @@
 
     function App() {
       const [serverInit, setServerInit] = useState(null);
-      useEffect(() => {
-        rpc("server_initialized").then((isInit) => {
-          setServerInit(isInit);
-        });
-      }, setServerInit);
+      const [browserExtensionID, setBrowserExtensionID] = useState(null);
+      useEffect(
+        () => {
+          rpc("server_initialized").then((isInit) => {
+            setServerInit(isInit.Result);
+            setBrowserExtensionID(isInit.BrowserExtensionID);
+          });
+        },
+        setServerInit,
+        setBrowserExtensionID
+      );
       return (
         <div>
           <h1>RSSLater Control Panel</h1>
@@ -521,7 +730,7 @@
             "Loading..."
           ) : serverInit ? (
             sessionStorage.getItem("jwt.config") ? (
-              <MainControlPanel />
+              <MainControlPanel browserExtensionID={browserExtensionID} />
             ) : (
               <Login
                 onLoginComplete={() => {
@@ -544,9 +753,6 @@
         </div>
       );
     }
-
-    window.base64 = base64;
-    window.base64url = base64url;
 
     ReactDOM.render(<App />, document.getElementById("root"));
   </script>

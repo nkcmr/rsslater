@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
-	"text/template"
 	"time"
 
 	"github.com/davecgh/go-spew/spew"
@@ -29,11 +28,12 @@ const (
 )
 
 type service struct {
-	origin       string
-	str          storage
-	web          *webauthn.WebAuthn
-	sessionData  map[string]any
-	sessionDataL sync.Mutex
+	origin             string
+	browserExtensionID string
+	str                storage
+	web                *webauthn.WebAuthn
+	sessionData        map[string]any
+	sessionDataL       sync.Mutex
 }
 
 func (s *service) storeSessionData(k string, v any) {
@@ -64,12 +64,20 @@ func (s *service) takeSessionData(k string) (any, bool) {
 	return v, ok
 }
 
-func (s *service) isInitialized(ctx context.Context, _ struct{}) (bool, error) {
+type isInitializedResponse struct {
+	Result             bool
+	BrowserExtensionID string
+}
+
+func (s *service) isInitialized(ctx context.Context, _ struct{}) (isInitializedResponse, error) {
 	sstate, err := s.str.state(ctx)
 	if err != nil {
-		return false, errors.Wrap(err, "failed to check storage state")
+		return isInitializedResponse{}, errors.Wrap(err, "failed to check storage state")
 	}
-	return sstate == initialized, nil
+	return isInitializedResponse{
+		Result:             sstate == initialized,
+		BrowserExtensionID: s.browserExtensionID,
+	}, nil
 }
 
 type webauthnUser struct {
@@ -240,9 +248,12 @@ func (s *service) webauthnLoginBegin(ctx context.Context, request webauthnLoginB
 type webauthnLoginFinishRequest struct {
 	LoginSessionID            string          `json:"loginSessionID"`
 	CredentialRequestResponse json.RawMessage `json:"credentialRequestResponse"`
+
+	// ForSaving is true if the webauthn request is for a saving token
+	ForSaving bool `json:"forSaving"`
 }
 type webauthnLoginFinishResponse struct {
-	ConfigJWT string
+	JWT string
 }
 
 func (s *service) webauthnLoginFinish(ctx context.Context, request webauthnLoginFinishRequest) (webauthnLoginFinishResponse, error) {
@@ -266,12 +277,22 @@ func (s *service) webauthnLoginFinish(ctx context.Context, request webauthnLogin
 		return webauthnLoginFinishResponse{}, errors.Wrap(err, "failed to validate webauthn login")
 	}
 
-	configJWT, err := s.str.newAuthKey(ctx, configuring, time.Now().Unix()+60*60*12)
+	var use authKeyUse
+	var expiry int64
+	if request.ForSaving {
+		use = saving
+		const twoYears = 63_068_544
+		expiry = time.Now().Unix() + twoYears
+	} else {
+		use = configuring
+		expiry = time.Now().Unix() + 60*60*12
+	}
+	jwt, err := s.str.newAuthKey(ctx, use, expiry)
 	if err != nil {
 		return webauthnLoginFinishResponse{}, errors.Wrap(err, "failed to issue new configuring jwt")
 	}
 	return webauthnLoginFinishResponse{
-		ConfigJWT: configJWT,
+		JWT: jwt,
 	}, nil
 }
 
@@ -340,37 +361,6 @@ func (s *service) genFeedURL(ctx context.Context, request genFeedURLRequest) (st
 		return "", errors.Wrap(err, "failed to generate auth key for saving")
 	}
 	return fmt.Sprintf("%s/feed.xml?authKey=%s", s.origin, feedPW), nil
-}
-
-//go:embed bookmarklet.min.js
-var bookmarkletTemplateStr string
-var bookmarkletTemplate = template.Must(template.New("sfl_bookmarklet").Parse(bookmarkletTemplateStr))
-
-type genSaveForLaterBookmarkRequest struct {
-	ConfigureJWT string
-}
-
-func (s *service) genSaveForLaterBookmark(ctx context.Context, request genSaveForLaterBookmarkRequest) (string, error) {
-	if err := s.validateAuthKey(ctx, request.ConfigureJWT, configuring); err != nil {
-		return "", errors.WithStack(err)
-	}
-	var out bytes.Buffer
-	type templateData struct {
-		Origin, AuthKey string
-	}
-	const twoYears = 63_068_544
-	authKey, err := s.str.newAuthKey(ctx, saving, time.Now().Unix()+twoYears)
-	if err != nil {
-		return "", errors.Wrap(err, "failed to generate auth key for saving")
-	}
-	err = bookmarkletTemplate.Execute(&out, templateData{
-		Origin:  s.origin,
-		AuthKey: authKey,
-	})
-	if err != nil {
-		return "", errors.Wrap(err, "failed to generate bookmarklet")
-	}
-	return out.String(), nil
 }
 
 type saveForLaterRequest struct {
