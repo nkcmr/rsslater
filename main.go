@@ -263,7 +263,7 @@ func rootCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&args.autoCert, "auto-cert", false, "automatically obtain TLS certificates for your origin (requires origin to be reachable via the whole Internet)")
 	cmd.Flags().StringVar(&args.tlsCert, "tls-cert", "", "a tls certificate to use for HTTPS")
 	cmd.Flags().StringVar(&args.tlsKey, "tls-key", "", "a tls key to use for HTTPS")
-	cmd.Flags().StringVar(&args.storageFilename, "storage-file", "./rsslater-storage.json", "where the storage file is written/read")
+	cmd.Flags().StringVar(&args.storageFilename, "storage-file", "./storage.rsslater.json", "where the storage file is written/read")
 	cmd.Flags().StringVar(&args.origin, "origin", "", "the publicly reachable url of your server")
 	cmd.Flags().StringVar(&args.browserExtensionID, "browser-extension-id", "pjekhacnlpbohbgbldadpnkaomlmlloe", "the ID of the browser extension being used with this installation")
 	return cmd
